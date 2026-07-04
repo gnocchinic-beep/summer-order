@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Ordini — Carico &amp; Scarico</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf-autotable.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <nav id="nav" class="nav"></nav>
+    <main class="main">
+      <div class="stack">
+        <div>
+          <h1 style="font-size: 26px;">Ordini</h1>
+          <p class="muted">Compila lo scarico settimanale, scarica il PDF e invialo al responsabile.</p>
+        </div>
+
+        <div class="timeline">
+          <div class="timeline-step">
+            <div id="dot1" class="timeline-dot active">1</div>
+            <span id="label1" class="timeline-label active">Compila</span>
+          </div>
+          <div class="timeline-sep"></div>
+          <div class="timeline-step">
+            <div id="dot2" class="timeline-dot">2</div>
+            <span id="label2" class="timeline-label">Invia</span>
+          </div>
+        </div>
+
+        <div id="content"><p class="muted">Caricamento...</p></div>
+
+        <div class="card">
+          <h2 class="eyebrow" style="margin-bottom: 14px;">Storico ordini</h2>
+          <div id="history" class="muted">—</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { requireAuth } from "./js/authGuard.js";
+    import { supabase } from "./js/supabaseClient.js";
+    import { renderNav } from "./js/nav.js";
+    import { escapeHtml } from "./js/constants.js";
+    import { generateOrderPdf } from "./js/pdf.js";
+    import { RESPONSABILE_EMAIL_DEFAULT } from "./js/config.js";
+
+    await requireAuth();
+    renderNav("ordini.html");
+
+    const content = document.getElementById("content");
+    let step = 1;
+    let order = null;
+    let items = [];
+
+    function setStep(n) {
+      step = n;
+      document.getElementById("dot1").className = "timeline-dot " + (step === 1 ? "active" : "done");
+      document.getElementById("label1").className = "timeline-label " + (step === 1 ? "active" : "done");
+      document.getElementById("dot2").className = "timeline-dot " + (step === 2 ? "active" : "");
+      document.getElementById("label2").className = "timeline-label " + (step === 2 ? "active" : "");
+      render();
+    }
+
+    async function loadHistory() {
+      const { data } = await supabase
+        .from("orders")
+        .select("*")
+        .neq("status", "bozza")
+        .order("created_at", { ascending: false })
+        .limit(8);
+      const hist = data ?? [];
+      const box = document.getElementById("history");
+      box.innerHTML = hist.length === 0 ? `<p class="muted">Nessun ordine ancora inviato.</p>` : `
+        <table>
+          <thead><tr><th>Data</th><th>Responsabile</th><th>Stato</th></tr></thead>
+          <tbody>
+            ${hist.map((o) => `<tr><td>${o.order_date}</td><td>${escapeHtml(o.responsabile_name)}</td><td style="text-transform: capitalize;">${o.status}</td></tr>`).join("")}
+          </tbody>
+        </table>`;
+    }
+
+    async function loadAll() {
+      const { data: draft } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("status", "bozza")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      order = draft ?? null;
+      items = [];
+      if (order) {
+        const { data: its } = await supabase
+          .from("order_items")
+          .select("*")
+          .eq("order_id", order.id)
+          .order("category")
+          .order("product_name");
+        items = its ?? [];
+      }
+      loadHistory();
+      render();
+    }
+
+    async function createOrder(responsabile, orderDate) {
+      const { data: prodList } = await supabase.from("products").select("*");
+      if (!prodList || prodList.length === 0) {
+        alert('Aggiungi prima almeno un prodotto al Catalogo.');
+        return;
+      }
+
+      const { data: newOrder, error } = await supabase
+        .from("orders")
+        .insert({ responsabile_name: responsabile, order_date: orderDate, status: "bozza" })
+        .select()
+        .single();
+
+      if (error || !newOrder) {
+        alert("Errore nella creazione dell'ordine.");
+        return;
+      }
+
+      const rows = prodList.map((p) => ({
+        order_id: newOrder.id,
+        product_id: p.id,
+        product_name: p.name,
+        category: p.category,
+        format: p.format,
+        giacenza_reale: p.current_quantity,
+        scarico: 0,
+        ordine: p.current_quantity,
+      }));
+      await supabase.from("order_items").insert(rows);
+      loadAll();
+    }
+
+    async function updateScarico(item, scarico) {
+      const ordine = Math.max(item.giacenza_reale - scarico, 0);
+      item.scarico = scarico;
+      item.ordine = ordine;
+      await supabase.from("order_items").update({ scarico, ordine }).eq("id", item.id);
+    }
+
+    async function deleteDraft() {
+      if (!order || !confirm("Eliminare questa bozza d'ordine?")) return;
+      await supabase.from("orders").delete().eq("id", order.id);
+      loadAll();
+    }
+
+    function openMailto() {
+      const lines = items.map((i) => `- ${i.product_name} (${i.format}): ${i.ordine}`).join("\n");
+      const subject = `Ordine rifornimento — ${order.order_date}`;
+      const body =
+        `Ciao ${order.responsabile_name},\n\n` +
+        `In allegato l'ordine di rifornimento del ${order.order_date}.\n\n` +
+        `Riepilogo:\n${lines}\n\nGrazie!`;
+      const mailto = `mailto:${RESPONSABILE_EMAIL_DEFAULT}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      window.location.href = mailto;
+    }
+
+    async function handleSend() {
+      generateOrderPdf({ responsabile: order.responsabile_name, orderDate: order.order_date, items });
+      openMailto();
+      await supabase.from("orders").update({ status: "inviato", sent_at: new Date().toISOString() }).eq("id", order.id);
+      setTimeout(() => { setStep(1); loadAll(); }, 1500);
+    }
+
+    function render() {
+      if (!order) {
+        content.innerHTML = `
+          <form id="createForm" class="card stack" style="gap: 16px;">
+            <h2 class="eyebrow">Nuovo ordine</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+              <label class="field">Responsabile magazzino centrale
+                <input id="respName" required placeholder="Nome e cognome" />
+              </label>
+              <label class="field">Data
+                <input id="respDate" type="date" value="${new Date().toISOString().slice(0, 10)}" />
+              </label>
+            </div>
+            <button type="submit" class="btn btn-primary" style="align-self: flex-start;">Crea ordine da compilare</button>
+          </form>`;
+        document.getElementById("createForm").addEventListener("submit", (e) => {
+          e.preventDefault();
+          const name = document.getElementById("respName").value.trim();
+          const date = document.getElementById("respDate").value;
+          if (!name) return;
+          createOrder(name, date);
+        });
+        return;
+      }
+
+      if (step === 1) {
+        content.innerHTML = `
+          <div class="card stack" style="gap: 16px;">
+            <div class="row">
+              <div>
+                <div style="font-weight: 600; font-size: 14px;">${escapeHtml(order.responsabile_name)}</div>
+                <div class="muted" style="font-size: 12px;">${order.order_date}</div>
+              </div>
+              <button id="delDraft" class="btn btn-danger">Elimina bozza</button>
+            </div>
+            <div style="overflow-x: auto;">
+              <table>
+                <thead><tr><th>Prodotto</th><th>Formato</th><th>Giacenza reale</th><th>Scarico</th><th>Ordine</th></tr></thead>
+                <tbody>
+                  ${items.map((it) => `
+                    <tr>
+                      <td>${escapeHtml(it.product_name)}</td>
+                      <td>${escapeHtml(it.format)}</td>
+                      <td class="muted">${it.giacenza_reale}</td>
+                      <td><input type="number" min="0" style="width: 80px;" data-item="${it.id}" value="${it.scarico}" /></td>
+                      <td style="color: var(--amber); font-weight: 600;" data-ordine="${it.id}">${it.ordine}</td>
+                    </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>
+            <p class="muted" style="font-size: 12px;">"Ordine" si calcola automaticamente come Giacenza reale − Scarico.</p>
+            <button id="toStep2" class="btn btn-primary" style="align-self: flex-end;">Vai al riepilogo →</button>
+          </div>`;
+
+        document.getElementById("delDraft").addEventListener("click", deleteDraft);
+        content.querySelectorAll("input[data-item]").forEach((input) => {
+          input.addEventListener("change", async (e) => {
+            const item = items.find((i) => i.id === e.target.dataset.item);
+            const val = Number(e.target.value) || 0;
+            await updateScarico(item, val);
+            content.querySelector(`[data-ordine="${item.id}"]`).textContent = item.ordine;
+          });
+        });
+        document.getElementById("toStep2").addEventListener("click", () => setStep(2));
+        return;
+      }
+
+      // step 2 — recap + invio
+      content.innerHTML = `
+        <div class="card stack" style="gap: 16px;">
+          <div>
+            <div style="font-weight: 600; font-size: 14px;">${escapeHtml(order.responsabile_name)}</div>
+            <div class="muted" style="font-size: 12px;">${order.order_date}</div>
+          </div>
+          <div style="overflow-x: auto;">
+            <table>
+              <thead><tr><th>Prodotto</th><th>Formato</th><th>Scarico</th><th>Ordine</th></tr></thead>
+              <tbody>
+                ${items.map((it) => `
+                  <tr>
+                    <td>${escapeHtml(it.product_name)}</td>
+                    <td>${escapeHtml(it.format)}</td>
+                    <td>${it.scarico}</td>
+                    <td style="color: var(--amber); font-weight: 600;">${it.ordine}</td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+          <p class="muted" style="font-size: 12px;">
+            "Invia ordine" scarica il PDF e apre la tua mail già compilata: allega il PDF appena scaricato prima di premere invio.
+          </p>
+          <div class="row" style="justify-content: flex-end;">
+            <button id="backStep1" class="btn btn-outline">← Modifica</button>
+            <button id="sendBtn" class="btn btn-primary">Invia ordine</button>
+          </div>
+        </div>`;
+
+      document.getElementById("backStep1").addEventListener("click", () => setStep(1));
+      document.getElementById("sendBtn").addEventListener("click", handleSend);
+    }
+
+    loadAll();
+  </script>
+</body>
+</html>

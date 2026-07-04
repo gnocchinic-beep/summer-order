@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Accedi — Carico &amp; Scarico</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="login-wrap">
+    <form id="loginForm" class="card login-card">
+      <div>
+        <div class="eyebrow">Carico &amp; Scarico</div>
+        <h1 style="font-size: 24px; margin-top: 6px;">Accedi</h1>
+      </div>
+
+      <label class="field">
+        Email
+        <input type="email" id="email" required placeholder="tu@locale.it" />
+      </label>
+
+      <label class="field">
+        Password
+        <input type="password" id="password" required placeholder="••••••••" />
+      </label>
+
+      <div id="error" class="muted" style="color: var(--red); display: none;"></div>
+
+      <button type="submit" id="submitBtn" class="btn btn-primary" style="justify-content: center;">
+        Entra
+      </button>
+
+      <p class="muted" style="font-size: 12px;">
+        Gli account si creano da Supabase &gt; Authentication &gt; Users
+        (uno per te, uno per il responsabile del magazzino centrale).
+      </p>
+    </form>
+  </div>
+
+  <script type="module">
+    import { supabase } from "./js/supabaseClient.js";
+
+    // Se sei già loggato, vai direttamente alla dashboard
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) window.location.href = "index.html";
+
+    const form = document.getElementById("loginForm");
+    const errorBox = document.getElementById("error");
+    const submitBtn = document.getElementById("submitBtn");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorBox.style.display = "none";
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Accesso...";
+
+      const email = document.getElementById("email").value;
+      const password = document.getElementById("password").value;
+
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+
+      if (error) {
+        errorBox.textContent = "Email o password non corrette.";
+        errorBox.style.display = "block";
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Entra";
+        return;
+      }
+      window.location.href = "index.html";
+    });
+  </script>
+</body>
+</html>

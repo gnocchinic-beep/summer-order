@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Inviati — Carico &amp; Scarico</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf-autotable.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <nav id="nav" class="nav"></nav>
+    <main class="main">
+      <div class="stack">
+        <div>
+          <h1 style="font-size: 26px;">Inviati</h1>
+          <p class="muted">Inserisci il carico effettivamente spedito e conferma per aggiornare la giacenza del locale.</p>
+        </div>
+        <div id="list" class="stack"><p class="muted">Caricamento...</p></div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { requireAuth } from "./js/authGuard.js";
+    import { supabase } from "./js/supabaseClient.js";
+    import { renderNav } from "./js/nav.js";
+    import { escapeHtml } from "./js/constants.js";
+    import { generateBollaPdf } from "./js/pdf.js";
+
+    await requireAuth();
+    renderNav("inviati.html");
+
+    const list = document.getElementById("list");
+    let orders = [];
+    let itemsByOrder = {};
+
+    async function load() {
+      const { data: ords } = await supabase
+        .from("orders")
+        .select("*")
+        .in("status", ["inviato", "confermato"])
+        .order("sent_at", { ascending: false });
+      orders = ords ?? [];
+
+      itemsByOrder = {};
+      for (const o of orders) {
+        const { data: its } = await supabase
+          .from("order_items")
+          .select("*")
+          .eq("order_id", o.id)
+          .order("category")
+          .order("product_name");
+        itemsByOrder[o.id] = its ?? [];
+      }
+      render();
+    }
+
+    async function saveCarico(itemId, value) {
+      await supabase.from("order_items").update({ carico: value }).eq("id", itemId);
+    }
+
+    async function handleConfirm(order) {
+      if (!confirm("Confermare il carico ricevuto? Aggiornerà la giacenza reale.")) return;
+      const items = itemsByOrder[order.id];
+
+      for (const item of items) {
+        const carico = item.carico ?? 0;
+        const { data: product } = await supabase
+          .from("products")
+          .select("current_quantity")
+          .eq("id", item.product_id)
+          .single();
+        const newQty = (product?.current_quantity ?? 0) + carico;
+        await supabase.from("products").update({ current_quantity: newQty }).eq("id", item.product_id);
+      }
+
+      const confirmedAt = new Date().toISOString();
+      await supabase.from("orders").update({ status: "confermato", confirmed_at: confirmedAt }).eq("id", order.id);
+
+      generateBollaPdf({
+        responsabile: order.responsabile_name,
+        orderDate: order.order_date,
+        confirmedAt,
+        items,
+      });
+
+      load();
+    }
+
+    function downloadBolla(order) {
+      const items = itemsByOrder[order.id];
+      generateBollaPdf({
+        responsabile: order.responsabile_name,
+        orderDate: order.order_date,
+        confirmedAt: order.confirmed_at,
+        items,
+      });
+    }
+
+    function render() {
+      if (orders.length === 0) {
+        list.innerHTML = `<p class="muted">Nessun ordine inviato al momento.</p>`;
+        return;
+      }
+
+      list.innerHTML = orders.map((order) => {
+        const items = itemsByOrder[order.id];
+        const isConf = order.status === "confermato";
+        return `
+          <div class="card stack" style="gap: 16px;" data-order="${order.id}">
+            <div class="row">
+              <div>
+                <div style="font-weight: 600; font-size: 14px;">${escapeHtml(order.responsabile_name)}</div>
+                <div class="muted" style="font-size: 12px;">Ordine del ${order.order_date}</div>
+              </div>
+              <span class="${isConf ? "badge-ok" : "badge-pending"}">${isConf ? "Confermato" : "In attesa di carico"}</span>
+            </div>
+            <div style="overflow-x: auto;">
+              <table>
+                <thead><tr><th>Prodotto</th><th>Formato</th><th>Ordine richiesto</th><th>Carico spedito</th></tr></thead>
+                <tbody>
+                  ${items.map((it) => `
+                    <tr>
+                      <td>${escapeHtml(it.product_name)}</td>
+                      <td>${escapeHtml(it.format)}</td>
+                      <td class="muted">${it.ordine}</td>
+                      <td>${isConf
+                        ? (it.carico ?? 0)
+                        : `<input type="number" min="0" style="width:80px;" data-carico="${it.id}" value="${it.carico ?? ""}" placeholder="${it.ordine}" />`
+                      }</td>
+                    </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>
+            ${isConf
+              ? `<div class="row" style="justify-content: flex-end;"><button class="btn btn-outline" data-bolla="${order.id}">Scarica bolla</button></div>`
+              : `<div class="row" style="justify-content: flex-end;"><button class="btn btn-primary" data-confirm="${order.id}">Conferma carico</button></div>`
+            }
+          </div>`;
+      }).join("");
+
+      list.querySelectorAll("input[data-carico]").forEach((input) => {
+        input.addEventListener("change", (e) => {
+          const orderId = e.target.closest("[data-order]").dataset.order;
+          const item = itemsByOrder[orderId].find((i) => i.id === e.target.dataset.carico);
+          const val = Number(e.target.value) || 0;
+          item.carico = val;
+          saveCarico(item.id, val);
+        });
+      });
+
+      list.querySelectorAll("button[data-confirm]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const order = orders.find((o) => o.id === btn.dataset.confirm);
+          handleConfirm(order);
+        });
+      });
+
+      list.querySelectorAll("button[data-bolla]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const order = orders.find((o) => o.id === btn.dataset.bolla);
+          downloadBolla(order);
+        });
+      });
+    }
+
+    load();
+  </script>
+</body>
+</html>

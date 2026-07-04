@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Dashboard — Carico &amp; Scarico</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <nav id="nav" class="nav"></nav>
+    <main class="main">
+      <div class="stack">
+        <div>
+          <h1 style="font-size: 26px;">Dashboard</h1>
+          <p class="muted">Panoramica della giacenza per macrocategoria.</p>
+        </div>
+
+        <div id="catGrid" class="cat-grid"></div>
+
+        <div class="card">
+          <h2 class="eyebrow" style="margin-bottom: 14px;">Sotto scorta minima</h2>
+          <div id="belowMin"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { requireAuth } from "./js/authGuard.js";
+    import { supabase } from "./js/supabaseClient.js";
+    import { renderNav } from "./js/nav.js";
+    import { CATEGORIES, CATEGORY_ICON, escapeHtml } from "./js/constants.js";
+
+    await requireAuth();
+    renderNav("index.html");
+
+    const { data } = await supabase.from("products").select("*").order("category");
+    const products = data ?? [];
+
+    const catGrid = document.getElementById("catGrid");
+    catGrid.innerHTML = CATEGORIES.map((cat) => {
+      const items = products.filter((p) => p.category === cat);
+      const under = items.filter((p) => p.current_quantity < p.min_quantity);
+      return `
+        <div class="card cat-card">
+          <div class="row" style="justify-content: space-between;">
+            <span class="cat-icon">${CATEGORY_ICON[cat]}</span>
+            ${under.length > 0 ? `<span class="badge-warn">${under.length} sotto scorta</span>` : ""}
+          </div>
+          <div class="cat-count">${items.length}</div>
+          <div class="muted" style="font-size: 12px;">${cat} — prodotti a catalogo</div>
+        </div>`;
+    }).join("");
+
+    const belowMin = products.filter((p) => p.current_quantity < p.min_quantity);
+    const belowMinBox = document.getElementById("belowMin");
+    if (belowMin.length === 0) {
+      belowMinBox.innerHTML = `<p class="muted">Tutti i prodotti sono sopra la giacenza minima. Nessuna azione richiesta.</p>`;
+    } else {
+      belowMinBox.innerHTML = `
+        <table>
+          <thead><tr><th>Prodotto</th><th>Formato</th><th>Categoria</th><th>Giacenza</th><th>Minimo</th></tr></thead>
+          <tbody>
+            ${belowMin.map((p) => `
+              <tr>
+                <td>${escapeHtml(p.name)}</td>
+                <td>${escapeHtml(p.format)}</td>
+                <td>${escapeHtml(p.category)}</td>
+                <td style="color: var(--red); font-weight: 600;">${p.current_quantity}</td>
+                <td class="muted">${p.min_quantity}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>`;
+    }
+  </script>
+</body>
+</html>

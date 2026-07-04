@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Catalogo — Carico &amp; Scarico</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <nav id="nav" class="nav"></nav>
+    <main class="main">
+      <div class="stack">
+        <div>
+          <h1 style="font-size: 26px;">Catalogo prodotti</h1>
+          <p class="muted">Registra o elimina i prodotti gestiti. La giacenza si aggiorna solo dagli Ordini, non da qui.</p>
+        </div>
+
+        <form id="addForm" class="card stack" style="gap: 16px;">
+          <h2 class="eyebrow">Nuovo prodotto</h2>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px;">
+            <label class="field">
+              Nome prodotto
+              <input id="fName" required placeholder="Es. Smirnoff" />
+            </label>
+            <label class="field">
+              Tipologia
+              <select id="fCategory"></select>
+            </label>
+            <label class="field">
+              Formato
+              <input id="fFormat" required placeholder="Es. 0.75l, cassa, slack" />
+            </label>
+            <label class="field">
+              Giacenza minima
+              <input id="fMin" type="number" min="0" placeholder="0" />
+            </label>
+          </div>
+          <div id="addError" class="muted" style="color: var(--red); display: none;"></div>
+          <button type="submit" class="btn btn-primary" style="align-self: flex-start;">Aggiungi al catalogo</button>
+        </form>
+
+        <div class="card">
+          <h2 class="eyebrow" style="margin-bottom: 14px;">Prodotti a catalogo</h2>
+          <div id="list" class="muted">Caricamento...</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { requireAuth } from "./js/authGuard.js";
+    import { supabase } from "./js/supabaseClient.js";
+    import { renderNav } from "./js/nav.js";
+    import { CATEGORIES, escapeHtml } from "./js/constants.js";
+
+    await requireAuth();
+    renderNav("catalogo.html");
+
+    const catSelect = document.getElementById("fCategory");
+    catSelect.innerHTML = CATEGORIES.map((c) => `<option value="${c}">${c}</option>`).join("");
+
+    async function load() {
+      const { data } = await supabase.from("products").select("*").order("category").order("name");
+      const products = data ?? [];
+      const list = document.getElementById("list");
+
+      if (products.length === 0) {
+        list.innerHTML = `<p class="muted">Nessun prodotto registrato ancora.</p>`;
+        return;
+      }
+
+      list.innerHTML = `
+        <table>
+          <thead><tr><th>Nome</th><th>Tipologia</th><th>Formato</th><th>Giacenza minima</th><th></th></tr></thead>
+          <tbody>
+            ${products.map((p) => `
+              <tr>
+                <td>${escapeHtml(p.name)}</td>
+                <td>${escapeHtml(p.category)}</td>
+                <td>${escapeHtml(p.format)}</td>
+                <td>${p.min_quantity}</td>
+                <td><button class="btn btn-danger" data-id="${p.id}">Elimina</button></td>
+              </tr>`).join("")}
+          </tbody>
+        </table>`;
+
+      list.querySelectorAll("button[data-id]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          if (!confirm("Eliminare questo prodotto dal catalogo?")) return;
+          await supabase.from("products").delete().eq("id", btn.dataset.id);
+          load();
+        });
+      });
+    }
+
+    document.getElementById("addForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const name = document.getElementById("fName").value.trim();
+      const format = document.getElementById("fFormat").value.trim();
+      const min_quantity = Number(document.getElementById("fMin").value) || 0;
+      const errorBox = document.getElementById("addError");
+      errorBox.style.display = "none";
+
+      if (!name || !format) return;
+
+      const { error } = await supabase.from("products").insert({
+        name,
+        category: catSelect.value,
+        format,
+        min_quantity,
+        current_quantity: 0,
+      });
+
+      if (error) {
+        errorBox.textContent = "Errore nel salvataggio. Riprova.";
+        errorBox.style.display = "block";
+        return;
+      }
+
+      e.target.reset();
+      load();
+    });
+
+    load();
+  </script>
+</body>
+</html>

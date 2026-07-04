@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Magazzino — Carico &amp; Scarico</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <nav id="nav" class="nav"></nav>
+    <main class="main">
+      <div class="stack">
+        <div>
+          <h1 style="font-size: 26px;">Magazzino</h1>
+          <p class="muted">Giacenza attuale, in sola lettura. Si aggiorna automaticamente quando confermi un carico in "Inviati".</p>
+        </div>
+        <div id="groups" class="stack"></div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { requireAuth } from "./js/authGuard.js";
+    import { supabase } from "./js/supabaseClient.js";
+    import { renderNav } from "./js/nav.js";
+    import { CATEGORIES, escapeHtml } from "./js/constants.js";
+
+    await requireAuth();
+    renderNav("magazzino.html");
+
+    const { data } = await supabase.from("products").select("*").order("name");
+    const products = data ?? [];
+    const groups = document.getElementById("groups");
+
+    if (products.length === 0) {
+      groups.innerHTML = `<p class="muted">Nessun prodotto a catalogo. Aggiungine da "Catalogo".</p>`;
+    } else {
+      groups.innerHTML = CATEGORIES.map((cat) => {
+        const items = products.filter((p) => p.category === cat);
+        if (items.length === 0) return "";
+        return `
+          <div class="card">
+            <h2 class="eyebrow" style="margin-bottom: 14px;">${cat}</h2>
+            <table>
+              <thead><tr><th>Prodotto</th><th>Formato</th><th>Giacenza</th></tr></thead>
+              <tbody>
+                ${items.map((p) => `
+                  <tr>
+                    <td>${escapeHtml(p.name)}</td>
+                    <td>${escapeHtml(p.format)}</td>
+                    <td style="${p.current_quantity < p.min_quantity ? "color: var(--red); font-weight: 600;" : ""}">${p.current_quantity}</td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>`;
+      }).join("");
+    }
+  </script>
+</body>
+</html>
