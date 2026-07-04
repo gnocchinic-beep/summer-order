@@ -1,25 +1,37 @@
 export const CATEGORIES = [
   "Vodka",
-  "Rum",
+  "Rum & Whisky",
   "Gin",
-  "Tequila",
+  "Tequila & Mezcal",
+  "Vermouth & Bitter",
+  "Liquori & Amari",
   "Champagne",
-  "Bibite",
+  "Bollicine",
+  "Analcolici",
+  "Post Mix",
+  "Acqua",
+  "Puree",
   "Birre",
   "Altro",
 ];
-
+ 
 export const CATEGORY_ICON = {
   Vodka: "🍸",
-  Rum: "🥃",
+  "Rum & Whisky": "🥃",
   Gin: "🌿",
-  Tequila: "🌵",
+  "Tequila & Mezcal": "🌵",
+  "Vermouth & Bitter": "🍷",
+  "Liquori & Amari": "🍯",
   Champagne: "🥂",
-  Bibite: "🥤",
+  Bollicine: "🍾",
+  Analcolici: "🥤",
+  "Post Mix": "🧃",
+  Acqua: "💧",
+  Puree: "🍓",
   Birre: "🍺",
   Altro: "📦",
 };
-
+ 
 export function escapeHtml(str) {
   return String(str)
     .replaceAll("&", "&amp;")
